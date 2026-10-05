@@ -7,13 +7,17 @@ from freezegun import freeze_time
 
 from khal.settings.exceptions import InvalidSettingsError
 from khal.settings.utils import config_checks, is_time_of_day
+from khal.ui import _add_alt_shades, _shade_color
 from khal.ui.gridview import (
     GridView,
+    _bar_lines,
     _wrap,
     assign_lanes,
     auto_rows_per_hour,
     layout_day,
     render_grid,
+    render_horizontal,
+    shaded_attrs,
     week_start,
 )
 from tests.utils import LOCALE_BERLIN, cal1
@@ -370,3 +374,192 @@ def test_is_time_of_day_invalid(string):
 )
 def test_auto_rows_per_hour(start, end, available, rows):
     assert auto_rows_per_hour(start, end, available) == rows
+
+
+def test_shaded_attrs_alternate_per_calendar():
+    blocks = layout_day(
+        DAY,
+        [
+            event((9, 0), (10, 0), "a", calendar="jira"),
+            event((9, 30), (10, 30), "standup", calendar="meetings"),
+            event((10, 0), (11, 0), "b", calendar="jira"),
+            event((11, 0), (12, 0), "c", calendar="jira"),
+        ],
+        9 * 60,
+        17 * 60,
+    ).blocks
+    assert shaded_attrs(blocks, lambda event: "gridblock " + event.calendar) == [
+        "gridblock jira",
+        "gridblock meetings",
+        "gridblock jira alt",
+        "gridblock jira",
+    ]
+
+
+def test_render_vertical_gap_between_back_to_back_events():
+    rows = _render_day(
+        [
+            event((9, 0), (10, 0), "first", calendar="jira"),
+            event((10, 0), (11, 0), "second", calendar="jira"),
+        ]
+    )
+    # 2 rows per hour: the first event gives up its last row to keep a gap
+    assert [attr_at(rows, row, 6) for row in range(1, 5)] == [
+        "gridblock jira",
+        "grid",
+        "gridblock jira alt",
+        "gridblock jira alt",
+    ]
+
+
+def _render_horizontal(events, **kwargs):
+    options = {
+        "width": 50,
+        "height": 6,
+        "start": 9 * 60 + 30,
+        "end": 11 * 60 + 30,
+        "headers": ["Wed 07"],
+        "title": "Jun 2017",
+        "today": DAY,
+        "focus_day": DAY,
+    }
+    options.update(kwargs)
+    layout = layout_day(DAY, events, options["start"], options["end"])
+    return render_horizontal([layout], **options)
+
+
+def test_render_horizontal_day():
+    rows = _render_horizontal(
+        [
+            event((9, 30), (10, 30), "ENG-38 incident", calendar="jira"),
+            event((10, 30), (11, 0), "ENG-39", calendar="jira"),
+            event((10, 0), (11, 0), "standup", calendar="meetings"),
+            event(DAY, DAY, "holiday", allday=True),
+            event((7, 0), (8, 0), "gym"),
+        ],
+        now=dt.datetime.combine(DAY, dt.time(11, 15)),
+    )
+    assert text(rows) == [
+        # the ▼ marker would cut into the 11:00 label, so the header skips it
+        "Jun 2017   09:30    10:00             11:00       ",
+        "Wed 07  ◀1 09:30–10:30       10:30–1… │   │       ",
+        "▪ holid    ENG-38 incident   ENG-39   │   │       ",
+        "           ┊        10:00–11:00       │   │       ",
+        "           ┊        standup           │   │       ",
+        "                                                  ",
+    ]
+    # back to back events of one calendar alternate shades and keep a gap column
+    assert attr_at(rows, 1, 11) == "gridblock jira"
+    assert attr_at(rows, 1, 28) == "grid"
+    assert attr_at(rows, 1, 29) == "gridblock jira alt"
+    # overlapping events stack in lanes
+    assert attr_at(rows, 3, 20) == "gridblock meetings"
+    assert attr_at(rows, 1, 0) == "grid header focus"
+    assert attr_at(rows, 1, 42) == "grid now"  # 11:15 on a 36 column axis
+
+
+def test_render_horizontal_now_marker_in_header():
+    rows = _render_horizontal([], now=dt.datetime.combine(DAY, dt.time(10, 30)))
+    col = text(rows)[0].index("▼")
+    assert attr_at(rows, 0, col) == "grid now"
+    assert text(rows)[1][col] == "│"
+
+
+def test_render_horizontal_after_counter_and_hour_labels():
+    rows = _render_horizontal([event((12, 0), (13, 0), "late")], width=60)
+    assert text(rows)[1].endswith("1▶")
+    assert "09:30" in text(rows)[0]
+    assert "10:00" in text(rows)[0]
+
+
+def test_render_horizontal_week_bands():
+    days = [week_start(DAY, 0) + dt.timedelta(days=num) for num in range(5)]
+    layouts = [
+        layout_day(day, [event((10, 0), (11, 0), "x")] if day == DAY else [], 570, 690)
+        for day in days
+    ]
+    rows = render_horizontal(
+        layouts,
+        width=60,
+        height=12,
+        start=570,
+        end=690,
+        headers=[day.strftime("%a") for day in days],
+        title="Week 23",
+        today=DAY,
+        focus_day=days[0],
+    )
+    lines = text(rows)
+    labels = [line[:3] for line in lines if line[:3] in ("Mon", "Tue", "Wed", "Thu", "Fri")]
+    assert labels == ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    wednesday = next(num for num, line in enumerate(lines) if line.startswith("Wed"))
+    assert attr_at(rows, wednesday, 0) == "grid header today"
+    assert "gridblock work" in {attr for attr, _ in rows[wednesday]}
+    # 5 bands of 1 lane and 4 separators fit 11 rows, so separators are drawn
+    assert lines[2].startswith("─")
+
+
+def test_render_horizontal_drops_separators_when_short():
+    days = [week_start(DAY, 0) + dt.timedelta(days=num) for num in range(7)]
+    layouts = [layout_day(day, [], 570, 690) for day in days]
+    rows = render_horizontal(
+        layouts,
+        width=60,
+        height=8,
+        start=570,
+        end=690,
+        headers=[day.strftime("%a") for day in days],
+        title="Week 23",
+        today=DAY,
+        focus_day=DAY,
+    )
+    assert [line[:3] for line in text(rows)[1:]] == [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun",
+    ]
+
+
+def test_bar_lines():
+    block = layout_day(DAY, [event((9, 30), (10, 15), "ENG-38 Incident rings fade")], 0, 1440)
+    block = block.blocks[0]
+    assert _bar_lines(block, 30, 1) == ["09:30 ENG-38 Incident rings…"]
+    assert _bar_lines(block, 10, 1) == ["ENG-38…"]
+    assert _bar_lines(block, 12, 3) == ["09:30–10:15", "ENG-38", "Incident…"]
+
+
+@freeze_time("2017-6-7 08:00")
+def test_gridview_week_days_and_orientation(coll_vdirs):
+    collection, _ = coll_vdirs
+    collection.insert(collection.create_event_from_ics(ICS, cal1), cal1)
+    conf = {**CONF, "view": {**CONF["view"], "grid_week_days": 5, "grid_orientation": "horizontal"}}
+    grid = GridView(collection, conf, mode="week")
+    assert grid.days == [dt.date(2017, 6, 5) + dt.timedelta(days=num) for num in range(5)]
+    lines = [line.decode() for line in grid.render((80, 12)).text]
+    assert lines[0].startswith("Week 23")
+    assert any(line.startswith("Wed 07") for line in lines)
+    assert "Fix login" in "".join(lines)
+
+
+def test_shade_color():
+    assert _shade_color("#000000") == "#333333"
+    assert _shade_color("#ffffff") == "#d1d1d1"
+    assert _shade_color("light magenta") == "light magenta"
+
+
+def test_add_alt_shades():
+    palette = [
+        ("gridblock jira", "", "", "", "#eeeeee", "#000000"),
+        ("gridblock meetings", "", "", "", "#eeeeee", "#202020"),
+        ("gridblock meetings alt", "", "", "", "#eeeeee", "#ff0000"),
+        ("grid", "", ""),
+    ]
+    names = {entry[0]: entry for entry in _add_alt_shades(palette, "gridblock ")}
+    assert names["gridblock jira alt"] == ("gridblock jira alt", "", "", "", "#eeeeee", "#333333")
+    # explicitly configured shades are kept
+    assert names["gridblock meetings alt"][5] == "#ff0000"
+    assert "grid alt" not in names

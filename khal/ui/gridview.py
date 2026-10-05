@@ -26,8 +26,10 @@ widget machinery:
 
 * :func:`layout_day` turns the events of one day into :class:`Block`\\ s
   (start/end in minutes, plus a lane so overlapping events end up side by side)
-* :func:`render_grid` paints those blocks onto a character grid and returns it
-  as rows of ``(urwid attribute, text)`` segments
+* :func:`render_grid` (time running top to bottom, one column per day) and
+  :func:`render_horizontal` (time running left to right, one band per day) paint
+  those blocks onto a character grid and return it as rows of
+  ``(urwid attribute, text)`` segments
 * :class:`GridView` is the box widget that ikhal puts next to the calendar
 """
 
@@ -45,6 +47,32 @@ GUTTER = 6  # width of the "09:00 " hour labels
 MAX_ALLDAY_ROWS = 3
 MAX_ROWS_PER_HOUR = 8
 MIN_WIDTH_FOR_TIME = 16  # narrower blocks only show the title
+LABEL = 12  # width of the day labels in the horizontal layout
+EDGE = 3  # width of the "◀2" / "2▶" hidden event counters in the horizontal layout
+MAX_LANE_HEIGHT = 3
+
+
+def default_calendar_attr(event: Any) -> str:
+    return "gridblock " + event.calendar
+
+
+def shaded_attrs(blocks: Sequence[Block], calendar_attr: Callable[[Any], str]) -> list[str]:
+    """the attribute of each block, alternating between a calendar's block color
+    and its slightly shifted twin (counting per calendar), so that consecutive
+    events of the same calendar read as separate blocks
+    """
+    seen: dict[str, int] = {}
+    attrs = []
+    for block in blocks:
+        attr = calendar_attr(block.event)
+        attrs.append(attr + " alt" if seen.get(attr, 0) % 2 else attr)
+        seen[attr] = seen.get(attr, 0) + 1
+    return attrs
+
+
+def _touching(block: Block, blocks: Sequence[Block]) -> bool:
+    """whether another block starts right where `block` ends"""
+    return any(other is not block and other.start == block.end for other in blocks)
 
 
 @dataclass
@@ -265,9 +293,9 @@ def render_grid(
     focus_day: dt.date,
     now: dt.datetime | None = None,
     rows_per_hour: int = 0,
-    calendar_attr: Callable[[Any], str] = lambda event: "gridblock " + event.calendar,
+    calendar_attr: Callable[[Any], str] = default_calendar_attr,
 ) -> list[list[tuple[str, str]]]:
-    """paint `layouts` (one per day) onto a `width` x `height` grid
+    """paint `layouts` (one per day, side by side) onto a `width` x `height` grid
 
     :param start: start of the visible range in minutes since midnight
     :param end: end of the visible range (exclusive) in minutes
@@ -329,16 +357,18 @@ def render_grid(
             canvas.put(row, col, "─" * day_width, "grid line")
 
     for lay, col in zip(layouts, day_cols):
-        for block in lay.blocks:
+        attrs = shaded_attrs(lay.blocks, calendar_attr)
+        for block, attr in zip(lay.blocks, attrs):
             row0 = row_of(block.start)
             row1 = min(max(row_of(block.end, up=True), row0 + 1), top + grid_rows)
+            if row1 - row0 >= 2 and _touching(block, lay.blocks):
+                row1 -= 1  # keep a gap row before the event that follows directly
             lane_width = day_width // block.lanes
             # leave a column between neighbouring lanes so same-colored events stay apart
             gap = 1 if block.lane < block.lanes - 1 and lane_width > 3 else 0
             left = col + block.lane * lane_width
             right = col + day_width if block.lane == block.lanes - 1 else left + lane_width
             inner = max(right - left - gap, 1)
-            attr = calendar_attr(block.event)
             canvas.fill(row0, row1, left, left + inner, attr)
             label = block.event.summary
             if inner >= MIN_WIDTH_FOR_TIME:
@@ -361,6 +391,145 @@ def render_grid(
             for cell in range(col, col + day_width):
                 if canvas.cells[row][cell][0] in ("grid", "grid line"):
                     canvas.cells[row][cell] = ("grid now", "─")
+    return canvas.rows()
+
+
+def _clock(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _bar_lines(block: Block, width: int, rows: int) -> list[str]:
+    """the text inside a horizontal event bar: time range above the wrapped title
+
+    a bar of a single row only gets the title (with the start time if there is room)
+    """
+    title = block.event.summary
+    if rows == 1:
+        if width >= MIN_WIDTH_FOR_TIME:
+            title = f"{_clock(block.start)} {title}"
+        return _wrap(title, width, 1)
+    span = f"{_clock(block.start)}–{_clock(block.end)}"
+    return [_wrap(span, width, 1)[0], *_wrap(title, width, rows - 1)]
+
+
+def _band_rows(layout: DayLayout) -> int:
+    """rows a day's band needs at one row per lane: its lanes or its label column"""
+    lanes = max((block.lanes for block in layout.blocks), default=1)
+    return max(lanes, 1 + min(len(layout.allday), MAX_ALLDAY_ROWS))
+
+
+def render_horizontal(
+    layouts: Sequence[DayLayout],
+    *,
+    width: int,
+    height: int,
+    start: int,
+    end: int,
+    headers: Sequence[str],
+    title: str,
+    today: dt.date,
+    focus_day: dt.date,
+    now: dt.datetime | None = None,
+    max_lane_height: int = MAX_LANE_HEIGHT,
+    calendar_attr: Callable[[Any], str] = default_calendar_attr,
+) -> list[list[tuple[str, str]]]:
+    """paint `layouts` (one band per day, stacked) onto a `width` x `height` grid
+
+    Time runs from left to right along the header row, events are bars, events
+    overlapping each other are stacked in lanes within their day's band. All-day
+    events are listed under the day's label on the left, the number of events
+    before (after) the visible hours is shown at the left (right) edge.
+
+    :param headers: the label of each day
+    :param title: shown above the day labels
+    :param max_lane_height: the most rows an event bar may grow to
+    """
+    canvas = _Canvas(width, height, "grid")
+    label_width = min(LABEL, max(width // 6, 1))
+    left = label_width + EDGE
+    axis = max(width - left - EDGE, 1)
+    span = end - start
+
+    def col_of(minutes: int) -> int:
+        return left + (minutes - start) * axis // span
+
+    cols_per_hour = axis * 60 / span
+    hours = range(math.ceil(start / 60) * 60, end + 1, 60)
+    halves = range(math.ceil(start / 30) * 30, end, 30) if cols_per_hour >= 8 else range(0)
+
+    # header: the title above the labels, then the hour labels along the axis
+    canvas.fill(0, 1, 0, width, "grid header")
+    canvas.put(0, 0, title, "grid header", label_width)
+    taken = left
+    for mark in sorted({start} | set(hours)):
+        text = f"{mark // 60:02d}:{mark % 60:02d}" if cols_per_hour >= 7 else f"{mark // 60}"
+        col = col_of(mark)
+        if mark == end:
+            col -= _text_width(text)  # right-align the last label at the end of the axis
+        if col >= taken:
+            taken = col + canvas.put(0, col, text, "grid hour") + 1
+
+    # bands: lane height scales up while everything fits, separators only if there is room
+    needed = [_band_rows(lay) for lay in layouts]
+    available = height - 1
+    separators = len(layouts) - 1 if sum(needed) + len(layouts) - 1 <= available else 0
+    lane_height = max(min((available - separators) // max(sum(needed), 1), max_lane_height), 1)
+
+    now_col = None
+    if now is not None and start <= now.hour * 60 + now.minute < end:
+        now_col = col_of(now.hour * 60 + now.minute)
+        if canvas.cells[0][now_col][0] == "grid header":  # don't cut into an hour label
+            canvas.put(0, now_col, "▼", "grid now")
+
+    row = 1
+    for num, lay in enumerate(layouts):
+        top, bottom = row, min(row + needed[num] * lane_height, height)
+        if top >= height:
+            break
+        if lay.day == focus_day:
+            label_attr = "grid header focus"
+        elif lay.day == today:
+            label_attr = "grid header today"
+        else:
+            label_attr = "grid header"
+        canvas.fill(top, top + 1, 0, label_width - 1, label_attr)
+        canvas.put(top, 0, headers[num], label_attr, label_width - 1)
+        for offset, event in enumerate(lay.allday[:MAX_ALLDAY_ROWS], 1):
+            canvas.put(top + offset, 0, "▪ " + event.summary, "grid allday", label_width - 1)
+        if lay.before:
+            canvas.put(top, label_width, f"◀{lay.before}", "grid more", EDGE)
+        if lay.after:
+            text = f"{lay.after}▶"
+            canvas.put(top, width - _text_width(text), text, "grid more", EDGE)
+
+        for band_row in range(top, bottom):
+            for mark in halves:
+                if mark % 60:
+                    canvas.put(band_row, col_of(mark), "┊", "grid line")
+            for mark in hours:
+                if mark < end:
+                    canvas.put(band_row, col_of(mark), "│", "grid line")
+
+        for block, attr in zip(lay.blocks, shaded_attrs(lay.blocks, calendar_attr)):
+            row0 = top + block.lane * lane_height
+            row1 = min(row0 + lane_height, bottom)
+            col0 = col_of(block.start)
+            col1 = max(col_of(block.end), col0 + 1)
+            if col1 - col0 >= 3:
+                col1 -= 1  # a gap column keeps events that follow each other apart
+            canvas.fill(row0, row1, col0, col1, attr)
+            for num, line in enumerate(_bar_lines(block, col1 - col0, row1 - row0)):
+                canvas.put(row0 + num, col0, line, attr, col1 - col0)
+
+        if now_col is not None and now is not None and lay.day == now.date():
+            for band_row in range(top, bottom):
+                if canvas.cells[band_row][now_col][0] in ("grid", "grid line"):
+                    canvas.cells[band_row][now_col] = ("grid now", "│")
+
+        row = bottom
+        if separators and num < len(layouts) - 1 and row < height:
+            canvas.put(row, 0, "─" * width, "grid line")
+            row += 1
     return canvas.rows()
 
 
@@ -401,7 +570,8 @@ class GridView(urwid.Widget):
     def days(self) -> list[dt.date]:
         if self.mode == "week":
             first = week_start(self.date, self._conf["locale"]["firstweekday"])
-            return [first + dt.timedelta(days=num) for num in range(7)]
+            length = self._conf["view"].get("grid_week_days", 7)
+            return [first + dt.timedelta(days=num) for num in range(length)]
         return [self.date]
 
     def refresh(self) -> None:
@@ -433,23 +603,39 @@ class GridView(urwid.Widget):
         width, height = size
         view = self._conf["view"]
         days = self.days
-        if self.mode == "week":
-            headers = [day.strftime("%a %d") for day in days]
+        layouts = [self._layout(day) for day in days]
+        now = dt.datetime.now(self._conf["locale"]["local_timezone"]).replace(tzinfo=None)
+        if view.get("grid_orientation", "vertical") == "horizontal":
+            rows = render_horizontal(
+                layouts,
+                width=width,
+                height=height,
+                start=view["grid_start"],
+                end=view["grid_end"],
+                headers=[day.strftime("%a %d") for day in days],
+                title=f"Week {days[0]:%V}" if self.mode == "week" else f"{days[0]:%b %Y}",
+                today=dt.date.today(),
+                focus_day=self.date,
+                now=now,
+                max_lane_height=MAX_LANE_HEIGHT if self.mode == "week" else 2 * MAX_LANE_HEIGHT,
+            )
         else:
-            headers = [day.strftime(self._conf["locale"]["longdateformat"]) for day in days]
-        localize = self._conf["locale"]["local_timezone"]
-        rows = render_grid(
-            [self._layout(day) for day in days],
-            width=width,
-            height=height,
-            start=view["grid_start"],
-            end=view["grid_end"],
-            headers=headers,
-            today=dt.date.today(),
-            focus_day=self.date,
-            now=dt.datetime.now(localize).replace(tzinfo=None),
-            rows_per_hour=view["grid_rows_per_hour"],
-        )
+            if self.mode == "week":
+                headers = [day.strftime("%a %d") for day in days]
+            else:
+                headers = [day.strftime(self._conf["locale"]["longdateformat"]) for day in days]
+            rows = render_grid(
+                layouts,
+                width=width,
+                height=height,
+                start=view["grid_start"],
+                end=view["grid_end"],
+                headers=headers,
+                today=dt.date.today(),
+                focus_day=self.date,
+                now=now,
+                rows_per_hour=view["grid_rows_per_hour"],
+            )
         canvases = [
             (urwid.Text(segments or [("grid", "")], wrap="clip").render((width,)), None, False)
             for segments in rows

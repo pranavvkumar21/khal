@@ -1472,6 +1472,42 @@ def _add_calendar_colors(
     return palette
 
 
+def _shade_color(color: str) -> str:
+    """a slightly lighter (or, for light colors, darker) twin of a #RRGGBB color
+
+    any other kind of color is returned unchanged
+    """
+    if len(color) != 7 or color[0] != "#":
+        return color
+    rgb = [int(color[i : i + 2], 16) for i in (1, 3, 5)]
+    luminance = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+    if luminance > 160:
+        rgb = [int(c * 0.82) for c in rgb]
+    else:
+        rgb = [int(c + (255 - c) * 0.2) for c in rgb]
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def _add_alt_shades(palette: list[tuple[str, ...]], prefix: str) -> list[tuple[str, ...]]:
+    """add an "<attr> alt" twin with a shifted background for every attr starting with `prefix`
+
+    The grid views alternate between both, so that events following each other
+    directly stay distinguishable.
+    """
+    names = {entry[0] for entry in palette}
+    shades = []
+    for entry in palette:
+        if not entry[0].startswith(prefix) or entry[0].endswith(" alt"):
+            continue
+        if entry[0] + " alt" in names:
+            continue  # explicitly configured
+        values = list(entry[1:])
+        if len(values) >= 5:
+            values[4] = _shade_color(values[4])
+        shades.append((entry[0] + " alt", *values))
+    return palette + shades
+
+
 def start_pane(
     pane,
     callback,
@@ -1577,6 +1613,7 @@ def start_pane(
 
     overwrite = [(key, *values) for key, values in pane._conf["palette"].items()]
     palette = merge_palettes(palette, overwrite)
+    palette = _add_alt_shades(palette, prefix="gridblock ")
     loop = urwid.MainLoop(
         widget=frame,
         palette=palette,
