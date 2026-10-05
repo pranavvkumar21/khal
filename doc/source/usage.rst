@@ -388,6 +388,27 @@ When the calendar on the left is in focus, you can
    selected), default keybinding :kbd:`n` as in new
  * search for events, default keybinding :kbd:`/`, a pop-up will ask for your
    search term
+ * cycle the right column between the event list, an hour-grid *day* view and
+   an hour-grid *week* view, default keybinding :kbd:`g` as in grid
+
+The day and week views lay out the events on a time axis, from
+``[view] grid_start_hour`` to ``[view] grid_end_hour`` (09:00 to 17:00 by
+default). Events are drawn as blocks in the color of their calendar, overlapping
+events are shown side by side, all-day events are listed above the grid, and a
+marker shows the current time. Events outside of the visible hours are counted
+above and below the grid. Set ``[view] default_view`` to ``day`` or ``week`` to
+start ikhal in one of the grid views. The colors can be changed in the
+``[palette]`` section, the attributes are ``grid``, ``grid header``, ``grid
+header focus``, ``grid header today``, ``grid hour``, ``grid line``, ``grid
+now``, ``grid allday``, ``grid more`` and ``gridblock`` (the text color on
+top of the event blocks).
+
+When a grid view is in focus, you can
+
+ * move by one day with the left and right keybindings, and by one week with the
+   up and down keybindings
+ * re-focus on the current date, default keybinding :kbd:`t`
+ * create a new event on the selected day, default keybinding :kbd:`n`
 
 When an event list is in focus, you can
 
