@@ -186,6 +186,10 @@ search = force_list(default=list('/'))
 # show logged messages
 log = force_list(default=list('L'))
 
+# cycle the right column of ikhal between the agenda list, an hour-grid day
+# view and an hour-grid week view
+grid = force_list(default=list('g'))
+
 # quit
 quit = force_list(default=list('q', 'Q'))
 
@@ -252,6 +256,23 @@ event_view_always_visible = boolean(default=False)
 
 # Add a blank line before the name of the day (khal only)
 blank_line_before_day = boolean(default=False)
+
+# What ikhal's right column shows on startup: the usual agenda list or an
+# hour-grid with the events of one *day* or one *week* laid out on a time axis.
+# Press the `grid` key (:kbd:`g` by default) to cycle through them.
+default_view = option('agenda', 'day', 'week', default='agenda')
+
+# First hour shown in ikhal's day and week grid views.
+grid_start_hour = integer(min=0, max=23, default=9)
+
+# Hour at which the grid views end (exclusive), e.g. 17 for a grid showing
+# 09:00 to 17:00. Events outside of that range are clipped, a marker shows how
+# many are hidden.
+grid_end_hour = integer(min=1, max=24, default=17)
+
+# Terminal rows per hour in the grid views, 0 scales the grid to the height of
+# the terminal.
+grid_rows_per_hour = integer(min=0, max=8, default=0)
 
 # Choose a color theme for khal.
 #

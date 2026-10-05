@@ -287,6 +287,14 @@ def config_checks(
                 config["calendars"][calendar]["path"]
             )
 
+    view = config.get("view", {})
+    if view.get("grid_start_hour", 0) >= view.get("grid_end_hour", 24):
+        logger.fatal(
+            "[view] grid_end_hour must be later than grid_start_hour, "
+            f"got {view['grid_start_hour']} and {view['grid_end_hour']}"
+        )
+        raise InvalidSettingsError()
+
     # check palette settings
     valid_palette = True
     for attr in config.get("palette", []):
