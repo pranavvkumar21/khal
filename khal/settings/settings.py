@@ -139,6 +139,7 @@ def get_config(
     if abort or not results:
         raise InvalidSettingsError()
 
+    _merge_palette_file(user_config)
     config_checks(user_config, _get_color_from_vdir, _get_vdir_type)
 
     extras = get_extra_values(user_config)
@@ -153,6 +154,29 @@ def get_config(
             section = sectionize(section)
             logger.warning(f'unknown key or subsection "{value}" in section "{section}"')
     return user_config
+
+
+def _merge_palette_file(config: ConfigObj) -> None:
+    """merge the [palette] of [view] palette_file into the config's [palette]
+
+    entries in the config file itself win over those from the palette file
+    """
+    path = config["view"].get("palette_file")
+    if not path:
+        return
+    if not os.path.exists(path):
+        logger.warning(f"palette_file {path} does not exist, ignoring it")
+        return
+    try:
+        palette_config = ConfigObj(path, interpolation=False, file_error=True)
+    except ConfigObjError as error:
+        logger.warning(f"could not parse palette_file {path}: {error}")
+        return
+    if "palette" not in config:
+        config["palette"] = {}
+    for key, value in palette_config.get("palette", {}).items():
+        if key not in config["palette"]:
+            config["palette"][key] = value if isinstance(value, list) else [value]
 
 
 def sectionize(sections: list[str], depth: int = 1) -> str:

@@ -346,3 +346,39 @@ def test_is_color():
     assert is_color("123") == "123"
     with pytest.raises(VdtValueError):
         assert is_color("red") == "red"
+
+
+def test_palette_file(tmpdir):
+    palette = tmpdir.join("palette.conf")
+    palette.write(
+        "[palette]\n"
+        "header = '', '', '', '#EBE2E3', '#131416'\n"
+        "gridblock work = '', '', '', '#EBE2E3', '#863D4D'\n"
+    )
+    config_file = tmpdir.join("khal.conf")
+    config_file.write(
+        open(PATH + "small.conf").read()
+        + f"\n[view]\npalette_file = {palette}\n\n[palette]\nheader = white, black\n"
+    )
+    config = get_config(
+        str(config_file),
+        _get_color_from_vdir=lambda x: None,
+        _get_vdir_type=lambda x: "calendar",
+    )
+    # the config file's own [palette] wins over the palette file
+    assert config["palette"]["header"] == ["white", "black"]
+    assert config["palette"]["gridblock work"] == ["", "", "", "#EBE2E3", "#863D4D"]
+
+
+def test_palette_file_missing(tmpdir, caplog):
+    config_file = tmpdir.join("khal.conf")
+    config_file.write(
+        open(PATH + "small.conf").read() + f"\n[view]\npalette_file = {tmpdir}/nope.conf\n"
+    )
+    config = get_config(
+        str(config_file),
+        _get_color_from_vdir=lambda x: None,
+        _get_vdir_type=lambda x: "calendar",
+    )
+    assert "palette" not in config or "header" not in config["palette"]
+    assert "does not exist" in caplog.text
