@@ -44,6 +44,7 @@ from .utils import (
     get_color_from_vdir,
     get_vdir_type,
     is_color,
+    is_time_of_day,
     is_timedelta,
     is_timezone,
     monthdisplay_option,
@@ -116,6 +117,7 @@ def get_config(
         "weeknumbers": weeknumber_option,
         "monthdisplay": monthdisplay_option,
         "color": is_color,
+        "time_of_day": is_time_of_day,
     }
     validator = Validator(fdict)
     results = user_config.validate(validator, preserve_errors=True)

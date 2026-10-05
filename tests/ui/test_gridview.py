@@ -2,14 +2,16 @@ import datetime as dt
 from types import SimpleNamespace
 
 import pytest
+from configobj.validate import VdtValueError
 from freezegun import freeze_time
 
 from khal.settings.exceptions import InvalidSettingsError
-from khal.settings.utils import config_checks
+from khal.settings.utils import config_checks, is_time_of_day
 from khal.ui.gridview import (
     GridView,
     _wrap,
     assign_lanes,
+    auto_rows_per_hour,
     layout_day,
     render_grid,
     week_start,
@@ -53,8 +55,8 @@ def test_layout_day_clips_and_counts_hidden_events():
             event((18, 0), (19, 0), "evening"),
             event(DAY, DAY, "holiday", allday=True),
         ],
-        start_hour=9,
-        end_hour=17,
+        start=540,
+        end=1020,
     )
     assert [(b.event.summary, b.start, b.end) for b in layout.blocks] == [
         ("standup", 9 * 60, 10 * 60),
@@ -68,13 +70,13 @@ def test_layout_day_clips_and_counts_hidden_events():
 def test_layout_day_multi_day_event():
     yesterday = dt.datetime.combine(DAY - dt.timedelta(days=1), dt.time(22))
     tomorrow = dt.datetime.combine(DAY + dt.timedelta(days=1), dt.time(2))
-    layout = layout_day(DAY, [event(yesterday, tomorrow)], start_hour=0, end_hour=24)
+    layout = layout_day(DAY, [event(yesterday, tomorrow)], start=0, end=1440)
     assert [(b.start, b.end) for b in layout.blocks] == [(0, 24 * 60)]
 
 
 def test_layout_day_event_ending_at_midnight():
     midnight = dt.datetime.combine(DAY + dt.timedelta(days=1), dt.time(0))
-    layout = layout_day(DAY, [event((23, 0), midnight)], start_hour=0, end_hour=24)
+    layout = layout_day(DAY, [event((23, 0), midnight)], start=0, end=1440)
     assert [(b.start, b.end) for b in layout.blocks] == [(23 * 60, 24 * 60)]
 
 
@@ -87,8 +89,8 @@ def test_assign_lanes():
             event((10, 0), (10, 30), "c"),  # fits into b's lane after b ended
             event((12, 0), (13, 0), "alone"),
         ],
-        start_hour=9,
-        end_hour=17,
+        start=540,
+        end=1020,
     )
     lanes = {b.event.summary: (b.lane, b.lanes) for b in layout.blocks}
     assert lanes == {"a": (0, 2), "b": (1, 2), "c": (1, 2), "alone": (0, 1)}
@@ -98,8 +100,8 @@ def test_assign_lanes_three_way_overlap():
     blocks = layout_day(
         DAY,
         [event((9, 0), (10, 0), str(num)) for num in range(3)],
-        start_hour=9,
-        end_hour=17,
+        start=540,
+        end=1020,
     ).blocks
     assign_lanes(blocks)
     assert sorted(b.lane for b in blocks) == [0, 1, 2]
@@ -113,12 +115,12 @@ def test_week_start():
 
 
 def _render_day(events, **kwargs):
-    layout = layout_day(DAY, events, start_hour=9, end_hour=12)
+    layout = layout_day(DAY, events, start=540, end=720)
     options = {
         "width": 30,
         "height": 7,
-        "start_hour": 9,
-        "end_hour": 12,
+        "start": 9 * 60,
+        "end": 12 * 60,
         "headers": ["Wednesday"],
         "today": DAY,
         "focus_day": DAY,
@@ -219,14 +221,15 @@ def test_render_wide_characters():
 def test_render_week():
     days = [week_start(DAY, 0) + dt.timedelta(days=num) for num in range(7)]
     layouts = [
-        layout_day(day, [event((9, 0), (10, 0), "x")] if day == DAY else [], 9, 12) for day in days
+        layout_day(day, [event((9, 0), (10, 0), "x")] if day == DAY else [], 9 * 60, 12 * 60)
+        for day in days
     ]
     rows = render_grid(
         layouts,
         width=6 + 7 * 4 + 6,
         height=7,
-        start_hour=9,
-        end_hour=12,
+        start=540,
+        end=720,
         headers=[day.strftime("%a") for day in days],
         today=DAY,
         focus_day=dt.date(2017, 6, 5),
@@ -250,7 +253,7 @@ CONF = {
         "today": ["t"],
         "new": ["n"],
     },
-    "view": {"grid_start_hour": 9, "grid_end_hour": 12, "grid_rows_per_hour": 2},
+    "view": {"grid_start": 9 * 60, "grid_end": 12 * 60, "grid_rows_per_hour": 2},
 }
 
 ICS = """BEGIN:VCALENDAR
@@ -305,14 +308,65 @@ def test_gridview_new_event():
     assert created == [(DAY, None)]
 
 
-@pytest.mark.parametrize(("start", "end"), [(17, 9), (9, 9)])
+@pytest.mark.parametrize(("start", "end"), [(17 * 60, 9 * 60), (9 * 60, 9 * 60)])
 def test_config_checks_grid_hours(start, end):
     config = {
         "calendars": {},
         "sqlite": {"path": "/tmp"},
         "locale": {"default_timezone": "Europe/Berlin", "local_timezone": "Europe/Berlin"},
         "default": {"default_calendar": None},
-        "view": {"grid_start_hour": start, "grid_end_hour": end},
+        "view": {"grid_start": start, "grid_end": end},
     }
     with pytest.raises(InvalidSettingsError):
         config_checks(config)
+
+
+def test_render_day_starting_on_the_half_hour():
+    layout = layout_day(DAY, [event((9, 30), (10, 30), "standup")], 9 * 60 + 30, 11 * 60 + 30)
+    rows = render_grid(
+        [layout],
+        width=30,
+        height=5,
+        start=9 * 60 + 30,
+        end=11 * 60 + 30,
+        headers=["Wednesday"],
+        today=DAY,
+        focus_day=DAY,
+        rows_per_hour=2,
+    )
+    assert text(rows)[1:] == [
+        "09:30 09:30 standup           ",
+        "10:00                         ",
+        "                              ",
+        "11:00 ────────────────────────",
+    ]
+    assert attr_at(rows, 2, 6) == "gridblock work"
+
+
+@pytest.mark.parametrize(
+    ("string", "minutes"),
+    [("09:30", 570), ("9:30", 570), ("00:00", 0), ("17:30", 1050), ("24:00", 1440)],
+)
+def test_is_time_of_day(string, minutes):
+    assert is_time_of_day(string) == minutes
+
+
+@pytest.mark.parametrize("string", ["9", "09:60", "25:00", "24:30", "noon", "-1:00"])
+def test_is_time_of_day_invalid(string):
+    with pytest.raises(VdtValueError):
+        is_time_of_day(string)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "available", "rows"),
+    [
+        (9 * 60, 17 * 60, 25, 3),  # full hours, anything goes
+        (9 * 60 + 30, 17 * 60 + 30, 25, 2),  # 3 rows of 20 minutes would split 09:30
+        (9 * 60 + 30, 17 * 60 + 30, 40, 4),
+        (9 * 60, 17 * 60, 200, 8),  # capped
+        (9 * 60, 17 * 60, 4, 1),  # does not fit, one row per hour and clip
+        (9 * 60 + 20, 17 * 60, 25, 3),  # 20 minute rows fit 09:20
+    ],
+)
+def test_auto_rows_per_hour(start, end, available, rows):
+    assert auto_rows_per_hour(start, end, available) == rows

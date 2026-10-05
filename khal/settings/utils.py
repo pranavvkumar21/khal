@@ -71,6 +71,20 @@ def is_timedelta(string: str) -> dt.timedelta:
         raise VdtValueError(f"Invalid timedelta: {string}")
 
 
+def is_time_of_day(string: str) -> int:
+    """parse a time of day like 09:30 into minutes since midnight
+
+    24:00 is accepted to mean the end of the day
+    """
+    try:
+        hours, minutes = (int(part) for part in string.strip().split(":"))
+    except ValueError:
+        raise VdtValueError(f"Invalid time of day: {string}, must be HH:MM")
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59) and (hours, minutes) != (24, 0):
+        raise VdtValueError(f"Invalid time of day: {string}, must be between 00:00 and 24:00")
+    return hours * 60 + minutes
+
+
 def weeknumber_option(option: str) -> Literal["left", "right", False]:
     """checks if *option* is a valid value
 
@@ -288,11 +302,8 @@ def config_checks(
             )
 
     view = config.get("view", {})
-    if view.get("grid_start_hour", 0) >= view.get("grid_end_hour", 24):
-        logger.fatal(
-            "[view] grid_end_hour must be later than grid_start_hour, "
-            f"got {view['grid_start_hour']} and {view['grid_end_hour']}"
-        )
+    if view.get("grid_start", 0) >= view.get("grid_end", 24 * 60):
+        logger.fatal("[view] grid_end must be later than grid_start")
         raise InvalidSettingsError()
 
     # check palette settings

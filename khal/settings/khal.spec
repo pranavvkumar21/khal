@@ -262,13 +262,14 @@ blank_line_before_day = boolean(default=False)
 # Press the `grid` key (:kbd:`g` by default) to cycle through them.
 default_view = option('agenda', 'day', 'week', default='agenda')
 
-# First hour shown in ikhal's day and week grid views.
-grid_start_hour = integer(min=0, max=23, default=9)
+# Time of day (HH:MM) at which ikhal's day and week grid views start, e.g.
+# the start of your working day.
+grid_start = time_of_day(default='09:00')
 
-# Hour at which the grid views end (exclusive), e.g. 17 for a grid showing
-# 09:00 to 17:00. Events outside of that range are clipped, a marker shows how
-# many are hidden.
-grid_end_hour = integer(min=1, max=24, default=17)
+# Time of day (HH:MM) at which the grid views end, e.g. 17:30. Use 24:00 for
+# midnight. Events outside of that range are clipped, a marker shows how many
+# are hidden.
+grid_end = time_of_day(default='17:00')
 
 # Terminal rows per hour in the grid views, 0 scales the grid to the height of
 # the terminal.

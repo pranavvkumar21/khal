@@ -121,31 +121,30 @@ def assign_lanes(blocks: list[Block]) -> None:
 def layout_day(
     day: dt.date,
     events: Iterable[Any],
-    start_hour: int,
-    end_hour: int,
+    start: int,
+    end: int,
 ) -> DayLayout:
     """sort the events of `day` into the all-day list and positioned blocks
 
     :param events: events with `allday`, `start_local`, `end_local`
         and `summary` attributes (i.e. :class:`khal.khalendar.event.Event`)
-    :param start_hour: first visible hour
-    :param end_hour: end of the visible range (exclusive), 24 for midnight
+    :param start: start of the visible range in minutes since midnight
+    :param end: end of the visible range (exclusive) in minutes, 24 * 60 for midnight
     """
     layout = DayLayout(day=day)
-    first, last = start_hour * 60, end_hour * 60
     for event in events:
         if event.allday:
             layout.allday.append(event)
             continue
-        start = _minutes(day, event.start_local, end=False)
-        end = _minutes(day, event.end_local, end=True)
-        end = max(end, start + 1)  # zero length events still deserve a row
-        if end <= first:
+        ev_start = _minutes(day, event.start_local, end=False)
+        ev_end = _minutes(day, event.end_local, end=True)
+        ev_end = max(ev_end, ev_start + 1)  # zero length events still deserve a row
+        if ev_end <= start:
             layout.before += 1
-        elif start >= last:
+        elif ev_start >= end:
             layout.after += 1
         else:
-            layout.blocks.append(Block(event, day, max(start, first), min(end, last)))
+            layout.blocks.append(Block(event, day, max(ev_start, start), min(ev_end, end)))
     assign_lanes(layout.blocks)
     return layout
 
@@ -241,13 +240,26 @@ def _fitting(text: str, short: str, width: int) -> str:
     return text if _text_width(text) <= width else short
 
 
+def auto_rows_per_hour(start: int, end: int, available: int) -> int:
+    """the most rows per hour fitting into `available` rows
+
+    Prefers a number that keeps the start, the end and every full hour on a row
+    boundary (e.g. an even number for a grid starting at 09:30).
+    """
+    fitting = max(min(int(available // ((end - start) / 60)), MAX_ROWS_PER_HOUR), 1)
+    for rows in range(fitting, 0, -1):
+        if (start % 60) * rows % 60 == 0 and (end % 60) * rows % 60 == 0:
+            return rows
+    return fitting
+
+
 def render_grid(
     layouts: Sequence[DayLayout],
     *,
     width: int,
     height: int,
-    start_hour: int,
-    end_hour: int,
+    start: int,
+    end: int,
     headers: Sequence[str],
     today: dt.date,
     focus_day: dt.date,
@@ -257,6 +269,8 @@ def render_grid(
 ) -> list[list[tuple[str, str]]]:
     """paint `layouts` (one per day) onto a `width` x `height` grid
 
+    :param start: start of the visible range in minutes since midnight
+    :param end: end of the visible range (exclusive) in minutes
     :param rows_per_hour: terminal rows per hour, 0 to scale to the available height
     :param now: where to draw the current time marker (only shown if its date is shown)
     :returns: one list of ``(attribute, text)`` segments per terminal row
@@ -294,21 +308,23 @@ def render_grid(
     if allday_rows:
         canvas.put(1, 0, "all", "grid hour", GUTTER - 1)
 
-    hours = end_hour - start_hour
+    hours = (end - start) / 60
     available = max(height - top - bottom, 1)
     if rows_per_hour <= 0:
-        rows_per_hour = max(min(available // hours, MAX_ROWS_PER_HOUR), 1)
-    grid_rows = min(hours * rows_per_hour, available)
+        rows_per_hour = auto_rows_per_hour(start, end, available)
+    grid_rows = min(math.ceil(hours * rows_per_hour), available)
 
     def row_of(minutes: int, *, up: bool = False) -> int:
-        scaled = (minutes - start_hour * 60) * rows_per_hour / 60
+        scaled = (minutes - start) * rows_per_hour / 60
         return top + (math.ceil(scaled) if up else int(scaled))
 
-    for hour in range(start_hour, end_hour):
-        row = row_of(hour * 60)
+    # a line for every full hour, plus one at the start if that is not a full hour
+    marks = sorted({start} | set(range(math.ceil(start / 60) * 60, end, 60)))
+    for mark in marks:
+        row = row_of(mark)
         if row >= top + grid_rows:
             break
-        canvas.put(row, 0, f"{hour:02d}:00", "grid hour", GUTTER - 1)
+        canvas.put(row, 0, f"{mark // 60:02d}:{mark % 60:02d}", "grid hour", GUTTER - 1)
         for col in day_cols:
             canvas.put(row, col, "─" * day_width, "grid line")
 
@@ -335,7 +351,7 @@ def render_grid(
             if lay.day != now.date():
                 continue
             minutes = now.hour * 60 + now.minute
-            if not start_hour * 60 <= minutes < end_hour * 60:
+            if not start <= minutes < end:
                 continue
             row = row_of(minutes)
             if row >= top + grid_rows:
@@ -409,9 +425,7 @@ class GridView(urwid.Widget):
         if day not in self._layouts:
             view = self._conf["view"]
             events = sorted(self.collection.get_events_on(day))
-            self._layouts[day] = layout_day(
-                day, events, view["grid_start_hour"], view["grid_end_hour"]
-            )
+            self._layouts[day] = layout_day(day, events, view["grid_start"], view["grid_end"])
         return self._layouts[day]
 
     def render(self, size: tuple[()] | tuple[int] | tuple[int, int], focus: bool = False):
@@ -428,8 +442,8 @@ class GridView(urwid.Widget):
             [self._layout(day) for day in days],
             width=width,
             height=height,
-            start_hour=view["grid_start_hour"],
-            end_hour=view["grid_end_hour"],
+            start=view["grid_start"],
+            end=view["grid_end"],
             headers=headers,
             today=dt.date.today(),
             focus_day=self.date,

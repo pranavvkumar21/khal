@@ -14,8 +14,8 @@ unreleased
   falling back to ``view.event_format``
 * NEW ikhal can show an hour-grid day and week view instead of the event list,
   toggle with :kbd:`g` (new keybinding ``grid``), configure with the new
-  ``[view]`` options ``default_view``, ``grid_start_hour``, ``grid_end_hour``
-  and ``grid_rows_per_hour``
+  ``[view]`` options ``default_view``, ``grid_start``, ``grid_end`` (times of
+  day like ``09:30``) and ``grid_rows_per_hour``
 
 0.14.1
 ======
