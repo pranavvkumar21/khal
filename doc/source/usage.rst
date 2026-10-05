@@ -388,16 +388,21 @@ When the calendar on the left is in focus, you can
    selected), default keybinding :kbd:`n` as in new
  * search for events, default keybinding :kbd:`/`, a pop-up will ask for your
    search term
- * cycle the right column between the event list, an hour-grid *day* view and
-   an hour-grid *week* view, default keybinding :kbd:`g` as in grid
+ * cycle the right column between the event list, an hour-grid *day* view, an
+   hour-grid *week* view and a *month* overview, default keybinding :kbd:`g` as
+   in grid
 
 The day and week views lay out the events on a time axis, from
 ``[view] grid_start`` to ``[view] grid_end`` (09:00 to 17:00 by default,
 any time of day like ``09:30`` works). Events are drawn as blocks in the color
 of their calendar, overlapping events are shown side by side, all-day events are
 listed above the grid, and a marker shows the current time. Events outside of
-the visible hours are counted above and below the grid. Set ``[view] default_view`` to ``day`` or ``week`` to
-start ikhal in one of the grid views.
+the visible hours are counted above and below the grid.
+
+The month view shows the whole month at a glance, one row per week: every day's
+cell lists as many of its events as fit (with their start time, in the color
+of their calendar) and how many more there are. Set ``[view] default_view`` to
+``day``, ``week`` or ``month`` to start ikhal in one of these views.
 
 With ``[view] grid_orientation = horizontal`` time runs from left to right
 instead, which suits wide and short terminals: every day gets a band, events

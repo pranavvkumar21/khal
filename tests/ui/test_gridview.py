@@ -15,8 +15,10 @@ from khal.ui.gridview import (
     assign_lanes,
     auto_rows_per_hour,
     layout_day,
+    month_weeks,
     render_grid,
     render_horizontal,
+    render_month,
     shaded_attrs,
     week_start,
 )
@@ -563,3 +565,96 @@ def test_add_alt_shades():
     # explicitly configured shades are kept
     assert names["gridblock meetings alt"][5] == "#ff0000"
     assert "grid alt" not in names
+
+
+def test_month_weeks():
+    weeks = month_weeks(DAY, 0)  # June 2017 starts on a Thursday
+    assert weeks[0][0] == dt.date(2017, 5, 29)
+    assert weeks[-1][-1] == dt.date(2017, 7, 2)
+    assert len(weeks) == 5
+    assert all(len(week) == 7 for week in weeks)
+    assert month_weeks(dt.date(2017, 6, 30), 6)[0][0] == dt.date(2017, 5, 28)
+
+
+def _render_month(day_events, **kwargs):
+    weeks = month_weeks(DAY, 0)
+    options = {
+        "width": 76,
+        "height": 22,
+        "month": DAY,
+        "weekdays": ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+        "today": DAY,
+        "focus_day": dt.date(2017, 6, 8),
+    }
+    options.update(kwargs)
+    return render_month(weeks, lambda day: day_events.get(day, []), **options)
+
+
+def test_render_month():
+    rows = _render_month(
+        {
+            DAY: [
+                event((9, 0), (10, 0), "standup", calendar="meetings"),
+                event((10, 0), (11, 0), "ENG-41 Fix login", calendar="jira"),
+                event((11, 0), (12, 0), "ENG-42", calendar="jira"),
+                event((13, 0), (14, 0), "lunch"),
+            ],
+            dt.date(2017, 6, 9): [event(DAY, DAY, "holiday", allday=True)],
+        }
+    )
+    lines = text(rows)
+    assert lines[0].strip() == "June 2017"
+    assert lines[1].split() == ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+    # 5 weeks of 4 rows: the day number and 3 slots
+    assert lines[2].startswith("29        │30        │31        │ 1")
+    week = 2 + 4 * 1  # the week of the 7th
+    cell = 2 * 11  # Wednesday is the third column
+    assert lines[week][cell : cell + 10] == " 7        "
+    # chips leave a column free before the next cell
+    assert lines[week + 1][cell : cell + 10] == "09:00 st… "
+    assert lines[week + 2][cell : cell + 10] == "10:00 EN… "
+    assert lines[week + 3][cell : cell + 10] == "+2 more   "
+    assert attr_at(rows, week, cell) == "grid header today"
+    assert attr_at(rows, week, cell + 11) == "grid header focus"
+    assert attr_at(rows, week + 1, cell) == "gridblock meetings"
+    assert attr_at(rows, week + 2, cell) == "gridblock jira"
+    # all-day events have no time
+    assert lines[week + 1][cell + 22 : cell + 30] == "holiday "
+    # days of the neighbouring months are dimmed, the 1st carries its month
+    assert attr_at(rows, 2, 0) == "grid more"
+    assert "Jul 1" in lines[-4]
+
+
+def test_render_month_alternates_shades_within_a_day():
+    rows = _render_month(
+        {
+            DAY: [
+                event((9, 0), (10, 0), "a", calendar="jira"),
+                event((10, 0), (11, 0), "b", calendar="jira"),
+            ]
+        }
+    )
+    assert attr_at(rows, 7, 22) == "gridblock jira"
+    assert attr_at(rows, 8, 22) == "gridblock jira alt"
+
+
+def test_render_month_too_short_for_chips():
+    rows = _render_month(
+        {DAY: [event((9, 0), (10, 0), "a"), event((10, 0), (11, 0), "b")]}, height=6
+    )
+    lines = text(rows)
+    # no title row, one row per week: the number of events next to the day
+    assert lines[0].split()[0] == "Mo"
+    assert lines[2][22:32] == " 7      2●"
+
+
+@freeze_time("2017-6-7 08:00")
+def test_gridview_month(coll_vdirs):
+    collection, _ = coll_vdirs
+    collection.insert(collection.create_event_from_ics(ICS, cal1), cal1)
+    grid = GridView(collection, CONF, mode="month")
+    lines = [line.decode() for line in grid.render((76, 22)).text]
+    assert lines[0].strip() == "June 2017"
+    assert "09:30 Fi…" in "".join(lines)
+    assert grid.keypress((76, 22), "j") is None
+    assert grid.date == dt.date(2017, 6, 14)

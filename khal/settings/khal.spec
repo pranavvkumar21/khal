@@ -187,7 +187,7 @@ search = force_list(default=list('/'))
 log = force_list(default=list('L'))
 
 # cycle the right column of ikhal between the agenda list, an hour-grid day
-# view and an hour-grid week view
+# view, an hour-grid week view and a month overview
 grid = force_list(default=list('g'))
 
 # quit
@@ -257,10 +257,11 @@ event_view_always_visible = boolean(default=False)
 # Add a blank line before the name of the day (khal only)
 blank_line_before_day = boolean(default=False)
 
-# What ikhal's right column shows on startup: the usual agenda list or an
-# hour-grid with the events of one *day* or one *week* laid out on a time axis.
+# What ikhal's right column shows on startup: the usual agenda list, an
+# hour-grid with the events of one *day* or one *week* laid out on a time axis,
+# or a *month* overview with the events of every day listed in its cell.
 # Press the `grid` key (:kbd:`g` by default) to cycle through them.
-default_view = option('agenda', 'day', 'week', default='agenda')
+default_view = option('agenda', 'day', 'week', 'month', default='agenda')
 
 # Time of day (HH:MM) at which ikhal's day and week grid views start, e.g.
 # the start of your working day.

@@ -533,13 +533,122 @@ def render_horizontal(
     return canvas.rows()
 
 
+def month_weeks(day: dt.date, firstweekday: int) -> list[list[dt.date]]:
+    """the weeks (lists of 7 dates) covering the month `day` is in"""
+    first = day.replace(day=1)
+    following = (first + dt.timedelta(days=32)).replace(day=1)
+    weeks = []
+    current = week_start(first, firstweekday)
+    while current < following:
+        weeks.append([current + dt.timedelta(days=num) for num in range(7)])
+        current += dt.timedelta(days=7)
+    return weeks
+
+
+def _truncate(text: str, width: int) -> str:
+    """cut `text` to `width` columns, ending in an ellipsis if anything was cut"""
+    if _text_width(text) <= width:
+        return text
+    while text and _text_width(text) > width - 1:
+        text = text[:-1]
+    return text.rstrip() + "…"
+
+
+def _chip(event: Any, day: dt.date) -> str:
+    """the one-line label of an event in a month cell"""
+    if event.allday or event.start_local.date() < day:
+        return event.summary
+    return f"{event.start_local:%H:%M} {event.summary}"
+
+
+def render_month(
+    weeks: Sequence[Sequence[dt.date]],
+    events: Callable[[dt.date], Sequence[Any]],
+    *,
+    width: int,
+    height: int,
+    month: dt.date,
+    weekdays: Sequence[str],
+    today: dt.date,
+    focus_day: dt.date,
+    calendar_attr: Callable[[Any], str] = default_calendar_attr,
+) -> list[list[tuple[str, str]]]:
+    """paint a month overview: one row of cells per week, one column per weekday
+
+    Each cell shows the day's number and as many of its events as fit, as
+    one-line chips in their calendar's color, followed by a "+n more" counter.
+
+    :param weeks: the dates to show, see :func:`month_weeks`
+    :param events: returns the (sorted) events of a day
+    :param month: any day of the month shown, days outside of it are dimmed
+    :param weekdays: the names shown above the columns
+    """
+    canvas = _Canvas(width, height, "grid")
+    cell = max((width - 6) // 7, 1)
+    cols = [num * (cell + 1) for num in range(7)]
+
+    title_row = height >= 2 + 2 * len(weeks)
+    top = 2 if title_row else 1
+    if title_row:
+        canvas.fill(0, 1, 0, width, "grid header")
+        title = f"{month:%B %Y}"
+        canvas.put(0, max((width - _text_width(title)) // 2, 0), title, "grid header")
+    for name, col in zip(weekdays, cols):
+        canvas.put(top - 1, col + max((cell - _text_width(name)) // 2, 0), name, "grid hour", cell)
+
+    week_height = max((height - top) // max(len(weeks), 1), 1)
+    for num, week in enumerate(weeks):
+        row0 = top + num * week_height
+        if row0 >= height:
+            break
+        for day, col in zip(week, cols):
+            if day == focus_day:
+                attr = "grid header focus"
+            elif day == today:
+                attr = "grid header today"
+            elif day.month != month.month:
+                attr = "grid more"
+            else:
+                attr = "grid header"
+            canvas.fill(row0, row0 + 1, col, col + cell, attr)
+            day_events = events(day)
+            number = f"{day.day:2d}"
+            if day.month != month.month and day.day == 1:
+                number = f"{day:%b} 1"
+            canvas.put(row0, col, number, attr, cell)
+            slots = week_height - 1
+            if slots <= 0:
+                if day_events:  # no room for chips, at least show how many there are
+                    count = f"{len(day_events)}●"
+                    canvas.put(row0, col + cell - _text_width(count), count, attr, cell)
+                continue
+            shown = day_events if len(day_events) <= slots else day_events[: slots - 1]
+            attrs = shaded_attrs([Block(event, day, 0, 0) for event in shown], calendar_attr)
+            for offset, (event, chip_attr) in enumerate(zip(shown, attrs), 1):
+                canvas.fill(row0 + offset, row0 + offset + 1, col, col + cell - 1, chip_attr)
+                canvas.put(
+                    row0 + offset,
+                    col,
+                    _truncate(_chip(event, day), cell - 1),
+                    chip_attr,
+                    cell - 1,
+                )
+            hidden = len(day_events) - len(shown)
+            if hidden:
+                canvas.put(row0 + slots, col, f"+{hidden} more", "grid more", cell)
+        for col in cols[1:]:
+            for row in range(row0, min(row0 + week_height, height)):
+                canvas.put(row, col - 1, "│", "grid line")
+    return canvas.rows()
+
+
 def week_start(day: dt.date, firstweekday: int) -> dt.date:
     """the first day of the week `day` is in"""
     return day - dt.timedelta(days=(day.weekday() - firstweekday) % 7)
 
 
 class GridView(urwid.Widget):
-    """box widget showing one day or one week on an hourly axis
+    """box widget showing one day or one week on an hourly axis, or a month overview
 
     Moving around: `left`/`right` move by a day, `up`/`down` by a week,
     `today` jumps to today, `new` creates an event on the selected day.
@@ -565,6 +674,7 @@ class GridView(urwid.Widget):
         self.on_date_change = on_date_change
         self.on_new = on_new
         self._layouts: dict[dt.date, DayLayout] = {}
+        self._events: dict[dt.date, list[Any]] = {}
 
     @property
     def days(self) -> list[dt.date]:
@@ -577,6 +687,7 @@ class GridView(urwid.Widget):
     def refresh(self) -> None:
         """forget everything loaded, e.g. after events changed"""
         self._layouts.clear()
+        self._events.clear()
         self._invalidate()
 
     def set_date(self, date: dt.date, notify: bool = True) -> None:
@@ -591,21 +702,41 @@ class GridView(urwid.Widget):
         self.mode = mode
         self._invalidate()
 
+    def _day_events(self, day: dt.date) -> list[Any]:
+        if day not in self._events:
+            self._events[day] = sorted(self.collection.get_events_on(day))
+        return self._events[day]
+
     def _layout(self, day: dt.date) -> DayLayout:
         if day not in self._layouts:
             view = self._conf["view"]
-            events = sorted(self.collection.get_events_on(day))
+            events = self._day_events(day)
             self._layouts[day] = layout_day(day, events, view["grid_start"], view["grid_end"])
         return self._layouts[day]
+
+    def _render_month(self, width: int, height: int) -> list[list[tuple[str, str]]]:
+        weeks = month_weeks(self.date, self._conf["locale"]["firstweekday"])
+        return render_month(
+            weeks,
+            self._day_events,
+            width=width,
+            height=height,
+            month=self.date,
+            weekdays=[day.strftime("%a") for day in weeks[0]],
+            today=dt.date.today(),
+            focus_day=self.date,
+        )
 
     def render(self, size: tuple[()] | tuple[int] | tuple[int, int], focus: bool = False):
         assert len(size) == 2, "GridView is a box widget"
         width, height = size
         view = self._conf["view"]
         days = self.days
-        layouts = [self._layout(day) for day in days]
+        layouts = [] if self.mode == "month" else [self._layout(day) for day in days]
         now = dt.datetime.now(self._conf["locale"]["local_timezone"]).replace(tzinfo=None)
-        if view.get("grid_orientation", "vertical") == "horizontal":
+        if self.mode == "month":
+            rows = self._render_month(width, height)
+        elif view.get("grid_orientation", "vertical") == "horizontal":
             rows = render_horizontal(
                 layouts,
                 width=width,

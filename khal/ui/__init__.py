@@ -1176,7 +1176,7 @@ class ClassicView(Pane):
         self.calendar.original_widget.set_focus_date(date)
 
     def set_view_mode(self, mode: str) -> None:
-        """show the agenda list or the hour-grid ('day' or 'week') on the right"""
+        """show the agenda list, an hour-grid ('day' or 'week') or the 'month' overview"""
         self.view_mode = mode
         column = self.eventscolumn if mode == "agenda" else self.gridcolumn
         options = self._columns.contents[1][1]
@@ -1189,7 +1189,7 @@ class ClassicView(Pane):
             self._grid.refresh()
 
     def cycle_view_mode(self) -> None:
-        modes = ["agenda", "day", "week"]
+        modes = ["agenda", "day", "week", "month"]
         self.set_view_mode(modes[(modes.index(self.view_mode) + 1) % len(modes)])
 
     def refresh_grid(self) -> None:
