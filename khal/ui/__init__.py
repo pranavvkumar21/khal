@@ -38,6 +38,7 @@ from . import colors
 from .base import Pane, Window
 from .calendarwidget import CalendarWidget
 from .editor import EventEditor, ExportDialog
+from .gridview import GridView
 from .widgets import CAttrMap, NColumns, NPile, button, linebox
 from .widgets import ExtendedEdit as Edit
 
@@ -708,6 +709,7 @@ class EventColumn(urwid.WidgetWrap):
             min_date = self.pane.calendar.base_widget.walker.earliest_date
             max_date = self.pane.calendar.base_widget.walker.latest_date
         self.pane.base_widget.calendar.base_widget.reset_styles_range(min_date, max_date)
+        self.pane.refresh_grid()
         if everything:
             min_date = self.dlistbox.body.first_date
             max_date = self.dlistbox.body.last_date
@@ -1125,9 +1127,16 @@ class ClassicView(Pane):
                 "eventcolumn focus",
             ),
         )
+        self._grid = GridView(
+            self.collection,
+            self._conf,
+            on_date_change=self._set_calendar_date,
+            on_new=self.new_event,
+        )
+        self.gridcolumn = ContainerWidget(CAttrMap(self._grid, "eventcolumn", "eventcolumn focus"))
         calendar = CAttrMap(
             CalendarWidget(
-                on_date_change=self.eventscolumn.original_widget.set_focus_date,
+                on_date_change=self._on_calendar_date_change,
                 keybindings=self._conf["keybindings"],
                 on_press=dict.fromkeys(self._conf["keybindings"]["new"], self.new_event),
                 firstweekday=self._conf["locale"]["firstweekday"],
@@ -1152,7 +1161,40 @@ class ClassicView(Pane):
             box_columns=[0, 1],
             outermost=True,
         )
+        self._columns = columns
+        self.view_mode = "agenda"
         Pane.__init__(self, columns, title=title, description=description)
+        self.set_view_mode(self._conf["view"]["default_view"])
+
+    def _on_calendar_date_change(self, date: dt.date) -> None:
+        """the calendar on the left moved, bring the right column along"""
+        self.eventscolumn.original_widget.set_focus_date(date)
+        self._grid.set_date(date, notify=False)
+
+    def _set_calendar_date(self, date: dt.date) -> None:
+        """the grid view moved, bring the calendar on the left along"""
+        self.calendar.original_widget.set_focus_date(date)
+
+    def set_view_mode(self, mode: str) -> None:
+        """show the agenda list or the hour-grid ('day' or 'week') on the right"""
+        self.view_mode = mode
+        column = self.eventscolumn if mode == "agenda" else self.gridcolumn
+        options = self._columns.contents[1][1]
+        focused = self._columns.focus_position
+        self._columns.contents[1] = (column, options)  # type: ignore[assignment]
+        self._columns.focus_position = focused
+        if mode != "agenda":
+            self._grid.set_mode(mode)
+            self._grid.set_date(self.eventscolumn.original_widget.focus_date, notify=False)
+            self._grid.refresh()
+
+    def cycle_view_mode(self) -> None:
+        modes = ["agenda", "day", "week"]
+        self.set_view_mode(modes[(modes.index(self.view_mode) + 1) % len(modes)])
+
+    def refresh_grid(self) -> None:
+        """reload the events shown in the grid views (and the current time marker)"""
+        self._grid.refresh()
 
     def delete_status(self, uid: str) -> DeletionType | None:
         if uid[0] in self._deleted[DeletionType.ALL]:
@@ -1196,7 +1238,13 @@ class ClassicView(Pane):
         binds = self._conf["keybindings"]
         if key in binds["search"]:
             self.search()
-        return super().keypress(size, key)
+        if key in binds["grid"]:
+            self.cycle_view_mode()
+            return None
+        rval = super().keypress(size, key)
+        if self.view_mode != "agenda":
+            self.refresh_grid()
+        return rval
 
     def search(self):
         """create a search dialog and display it"""
@@ -1352,6 +1400,7 @@ def _add_calendar_colors(
     color_mode: Literal["256colors", "rgb"],
     base: str | None = None,
     attr_template: str = "calendar {}",
+    hmethod: str | None = None,
 ) -> list[tuple[str, ...]]:
     """Add the colors for the defined calendars to the palette.
 
@@ -1363,6 +1412,8 @@ def _add_calendar_colors(
     :param color_mode: which color mode we are in
     :param base: the attribute to extract the background and foreground color from
     :param attr_template: the template to use for the attribute name
+    :param hmethod: how to apply the calendar's color, foreground or background,
+        defaults to the configured highlighting method
     :returns: the modified palette
     """
     bg_color, fg_color = "", ""
@@ -1392,7 +1443,7 @@ def _add_calendar_colors(
         entry = _urwid_palette_entry(
             attr_template.format(cal["name"]),
             color,
-            collection.hmethod,
+            hmethod or collection.hmethod,
             color_mode=color_mode,
             foreground=fg_color,
             background=bg_color,
@@ -1505,6 +1556,16 @@ def start_pane(
         attr_template="calendar {} popup",
     )
 
+    # event blocks in the grid views are always filled with the calendar's color
+    palette = _add_calendar_colors(
+        palette,
+        pane.collection,
+        color_mode=color_mode,
+        base="gridblock",
+        attr_template="gridblock {}",
+        hmethod="background",
+    )
+
     def merge_palettes(pallete_a, pallete_b) -> list[tuple[str, ...]]:
         """Merge two palettes together, with the second palette taking priority."""
         merged = {}
@@ -1535,6 +1596,7 @@ def start_pane(
             meta["last_today"] = today
             pane.calendar.original_widget.reset_styles_range(today - dt.timedelta(days=1), today)
             pane.eventscolumn.original_widget.update_date_line()
+        pane.refresh_grid()
         loop.set_alarm_in(60, redraw_today, pane)
 
     loop.set_alarm_in(60, redraw_today, pane)

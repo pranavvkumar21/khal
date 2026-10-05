@@ -60,6 +60,16 @@ dark = [
     ("popupbg", "white", "black", "bold"),
     ("popupper", "white", "dark cyan"),
     ("caption", "white", "", "bold"),
+    ("grid", "", "", ""),
+    ("grid header", "light gray", "", "bold"),
+    ("grid header focus", "black", "light gray", "bold"),
+    ("grid header today", "white", "dark magenta", "bold"),
+    ("grid hour", "dark gray", "", ""),
+    ("grid line", "dark gray", "", ""),
+    ("grid now", "light red", "", "bold"),
+    ("grid allday", "light gray", "", ""),
+    ("grid more", "dark gray", "", ""),
+    ("gridblock", "black", "", ""),
 ]
 light = [
     ("header", "black", "white"),
@@ -97,6 +107,16 @@ light = [
     ("popupbg", "white", "black", "bold"),
     ("popupper", "black", "light gray"),
     ("caption", "black", "", ""),
+    ("grid", "", "", ""),
+    ("grid header", "dark gray", "", "bold"),
+    ("grid header focus", "white", "dark gray", "bold"),
+    ("grid header today", "white", "dark magenta", "bold"),
+    ("grid hour", "dark gray", "", ""),
+    ("grid line", "dark gray", "", ""),
+    ("grid now", "light red", "", "bold"),
+    ("grid allday", "dark gray", "", ""),
+    ("grid more", "dark gray", "", ""),
+    ("gridblock", "black", "", ""),
 ]
 
 themes: dict[str, list[tuple[str, ...]]] = {"light": light, "dark": dark}
